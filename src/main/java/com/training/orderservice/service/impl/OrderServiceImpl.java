@@ -12,9 +12,10 @@ import com.training.orderservice.entity.OrderItem;
 import com.training.orderservice.entity.OrderStatus;
 import com.training.orderservice.exception.DuplicateProductInOrderException;
 import com.training.orderservice.exception.InsufficientStockException;
-import com.training.orderservice.exception.ProductNotFoundException;
+import com.training.orderservice.exception.OrderNotFoundException;
 import com.training.orderservice.mapper.OrderMapper;
 import com.training.orderservice.repository.OrderRepository;
+import com.training.orderservice.security.CallerContext;
 import com.training.orderservice.service.OrderService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -48,12 +49,8 @@ public class OrderServiceImpl implements OrderService {
     public OrderResponse createOrder(CreateOrderRequest request) {
         validateNoDuplicateProducts(request);
 
-        Order order = new Order();
-        order.setCustomerId(request.getCustomerId());
-        order.setCustomerName(request.getCustomerName());
-        order.setCustomerEmail(request.getCustomerEmail());
-        order.setShippingAddress(request.getShippingAddress());
-        order.setStatus(OrderStatus.PENDING);
+        Order order = new Order(request.getCustomerId(), request.getCustomerName(),
+                request.getCustomerEmail(), request.getShippingAddress());
         order = orderRepository.save(order);
 
         BigDecimal total = BigDecimal.ZERO;
@@ -69,13 +66,8 @@ public class OrderServiceImpl implements OrderService {
             productServiceClient.reduceStock(itemRequest.getProductId(), itemRequest.getQuantity(), order.getId());
 
             BigDecimal subtotal = snapshot.price().multiply(BigDecimal.valueOf(itemRequest.getQuantity()));
-            OrderItem item = new OrderItem();
-            item.setProductId(itemRequest.getProductId());
-            item.setProductNameSnapshot(snapshot.name());
-            item.setUnitPriceSnapshot(snapshot.price());
-            item.setQuantity(itemRequest.getQuantity());
-            item.setSubtotal(subtotal);
-            order.addItem(item);
+            order.addItem(new OrderItem(order, itemRequest.getProductId(), snapshot.name(),
+                    snapshot.price(), itemRequest.getQuantity()));
             total = total.add(subtotal);
         }
 
@@ -86,6 +78,21 @@ public class OrderServiceImpl implements OrderService {
         dispatchConfirmationNotification(order);
 
         return orderMapper.toResponse(order);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Order getOrderById(Long orderId, CallerContext caller) {
+        Order order = orderRepository.findByIdWithItems(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+        if (!caller.isAdmin() && !order.getCustomerId().equals(caller.customerId())) {
+            // BR-10: a cross-customer access attempt must not be distinguishable from a
+            // missing order, so this reuses OrderNotFoundException rather than a 403.
+            throw new OrderNotFoundException(orderId);
+        }
+
+        return order;
     }
 
     @Override
