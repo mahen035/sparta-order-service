@@ -1,9 +1,7 @@
 package com.training.orderservice.exception;
 
-import java.util.UUID;
-
 public class OrderNotFoundException extends RuntimeException {
-    public OrderNotFoundException(UUID orderId) {
+    public OrderNotFoundException(Long orderId) {
         super("Order not found: " + orderId);
     }
 }

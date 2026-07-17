@@ -13,7 +13,9 @@ import com.training.orderservice.entity.OrderItem;
 import com.training.orderservice.entity.OrderStatus;
 import com.training.orderservice.exception.DuplicateProductInOrderException;
 import com.training.orderservice.exception.InsufficientStockException;
-import com.training.orderservice.exception.ProductNotFoundException;
+import com.training.orderservice.exception.InvalidOrderStatusTransitionException;
+import com.training.orderservice.exception.OrderAccessDeniedException;
+import com.training.orderservice.exception.OrderNotFoundException;
 import com.training.orderservice.mapper.OrderMapper;
 import com.training.orderservice.repository.OrderRepository;
 import com.training.orderservice.security.CallerContext;
@@ -26,14 +28,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.UUID;
 
 @Service
 public class OrderServiceImpl implements OrderService {
+
+    private static final Logger log = LoggerFactory.getLogger(OrderServiceImpl.class);
 
     private final OrderRepository orderRepository;
     private final ProductServiceClient productServiceClient;
@@ -87,9 +89,106 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional(readOnly = true)
+    public Order getOrderById(Long orderId, CallerContext caller) {
+        Order order = orderRepository.findByIdWithItems(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+        if (!caller.isAdmin() && !order.getCustomerId().equals(caller.customerId())) {
+            // BR-10: a cross-customer access attempt must not be distinguishable from a
+            // missing order, so this reuses OrderNotFoundException rather than a 403.
+            throw new OrderNotFoundException(orderId);
+        }
+
+        return order;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Page<OrderResponse> getOrders(OrderStatus status, Long customerId, Pageable pageable) {
         return orderRepository.findByOptionalFilters(status, customerId, pageable)
                 .map(orderMapper::toResponse);
+    }
+
+    @Override
+    @Transactional
+    public OrderResponse updateStatus(Long orderId, UpdateOrderStatusRequest request) {
+        if (request == null || request.getStatus() == null) {
+            throw new IllegalArgumentException("Status must not be null");
+        }
+
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+        OrderStatus from = order.getStatus();
+        OrderStatus to = request.getStatus();
+
+        // No-op if the status is unchanged.
+        if (from == to) {
+            log.info("Order {} already in status {}", orderId, from);
+            return orderMapper.toResponse(order);
+        }
+
+        // Enforce the state-machine (SDD Section 11).
+        if (!from.canManuallyTransitionTo(to)) {
+            log.warn("Invalid status transition for order {}: {} -> {}", orderId, from, to);
+            throw new InvalidOrderStatusTransitionException(from, to);
+        }
+
+        order.setStatus(to);
+        Order saved = orderRepository.save(order);
+        log.info("Order {} transitioned {} -> {}", orderId, from, to);
+
+        return orderMapper.toResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public OrderResponse cancelOrder(Long orderId, CallerContext caller) {
+        Order order = orderRepository.findByIdWithItems(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+        // BR-10: a customer may only cancel their own order; a cross-customer attempt is
+        // indistinguishable from a missing order (consistent with getOrderById).
+        if (!caller.isAdmin() && !order.getCustomerId().equals(caller.customerId())) {
+            throw new OrderNotFoundException(orderId);
+        }
+
+        OrderStatus from = order.getStatus();
+
+        // BR-5 / BR-7: only PENDING or CONFIRMED orders can be cancelled.
+        if (!from.canManuallyTransitionTo(OrderStatus.CANCELLED)) {
+            throw new InvalidOrderStatusTransitionException(from, OrderStatus.CANCELLED);
+        }
+
+        // BR-6: a CONFIRMED order already had its stock reduced, so restore it (best-effort).
+        if (from == OrderStatus.CONFIRMED) {
+            for (OrderItem item : order.getItems()) {
+                productServiceClient.restoreStock(item.getProductId(), item.getQuantity(), order.getId());
+            }
+        }
+
+        order.setStatus(OrderStatus.CANCELLED);
+        Order saved = orderRepository.save(order);
+        log.info("Order {} cancelled (was {})", orderId, from);
+
+        return orderMapper.toResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public void deleteOrder(Long orderId, CallerContext caller) {
+        // BR-11: hard-delete is admin-only. Check the role before the lookup so a
+        // non-admin cannot probe for the existence of an order (403, not 404).
+        if (!caller.isAdmin()) {
+            throw new OrderAccessDeniedException("Hard-delete of an order requires an admin role.");
+        }
+
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+        // Hard delete: physically remove the order (and cascaded order_items).
+        orderRepository.delete(order);
+        log.info("Order {} hard-deleted by admin", orderId);
     }
 
     private void validateNoDuplicateProducts(CreateOrderRequest request) {
