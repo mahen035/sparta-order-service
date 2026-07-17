@@ -17,8 +17,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.UUID;
-
 @RestController
 @RequestMapping("/api/v1/orders")
 public class OrderController {
@@ -62,10 +60,31 @@ public class OrderController {
 
     @PatchMapping("/{orderId}/status")
     public ResponseEntity<OrderResponse> updateStatus(
-            @PathVariable UUID orderId,
+            @PathVariable Long orderId,
             @Valid @RequestBody UpdateOrderStatusRequest request) {
 
         OrderResponse response = orderService.updateStatus(orderId, request);
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/{orderId}/cancel")
+    public ResponseEntity<OrderResponse> cancelOrder(
+            @PathVariable Long orderId,
+            @RequestHeader("X-Customer-Id") Long customerId,
+            @RequestHeader(value = "X-User-Role", required = false, defaultValue = "CUSTOMER") String role) {
+        CallerContext caller = new CallerContext(customerId, role);
+        return ResponseEntity.ok(orderService.cancelOrder(orderId, caller));
+    }
+
+    @DeleteMapping("/{orderId}")
+    public ResponseEntity<Void> deleteOrder(
+            @PathVariable Long orderId,
+            @RequestHeader(value = "X-Customer-Id", required = false) Long customerId,
+            @RequestHeader(value = "X-User-Role", required = false, defaultValue = "CUSTOMER") String role) {
+        // Hard-delete is admin-only (BR-11) and independent of ownership, so
+        // X-Customer-Id is optional here; the admin-role check happens in the service.
+        CallerContext caller = new CallerContext(customerId, role);
+        orderService.deleteOrder(orderId, caller);
+        return ResponseEntity.noContent().build();
     }
 }

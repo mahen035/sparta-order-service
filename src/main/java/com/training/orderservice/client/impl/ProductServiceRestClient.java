@@ -23,4 +23,9 @@ public class ProductServiceRestClient implements ProductServiceClient {
     public void reduceStock(Long productId, int quantity, Long orderId) {
         // no-op until Product Service is integrated
     }
+
+    @Override
+    public void restoreStock(Long productId, int quantity, Long orderId) {
+        // no-op until Product Service is integrated (compensating call for cancellation, BR-6)
+    }
 }

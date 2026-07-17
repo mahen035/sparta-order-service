@@ -9,8 +9,6 @@ import com.training.orderservice.security.CallerContext;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
-import java.util.UUID;
-
 public interface OrderService {
 
     Order getOrderById(Long orderId, CallerContext caller);
@@ -19,5 +17,9 @@ public interface OrderService {
 
     Page<OrderResponse> getOrders(OrderStatus status, Long customerId, Pageable pageable);
 
-    OrderResponse updateStatus(UUID orderId, UpdateOrderStatusRequest request);
+    OrderResponse updateStatus(Long orderId, UpdateOrderStatusRequest request);
+
+    OrderResponse cancelOrder(Long orderId, CallerContext caller);
+
+    void deleteOrder(Long orderId, CallerContext caller);
 }
