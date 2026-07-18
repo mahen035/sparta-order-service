@@ -12,7 +12,6 @@ import jakarta.persistence.SequenceGenerator;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
-import java.util.UUID;
 
 @Entity
 @Table(name = "order_items")
@@ -28,8 +27,8 @@ public class OrderItem {
     @JoinColumn(name = "order_id", nullable = false)
     private Order order;
 
-    @Column(name = "product_id", nullable = false, columnDefinition = "uuid")
-    private UUID productId;
+    @Column(name = "product_id", nullable = false)
+    private Long productId;
 
     @Column(name = "product_name_snapshot", nullable = false, length = 200)
     private String productNameSnapshot;
@@ -47,7 +46,7 @@ public class OrderItem {
     protected OrderItem() {
     }
 
-    public OrderItem(Order order, UUID productId, String productNameSnapshot, BigDecimal unitPriceSnapshot, Integer quantity) {
+    public OrderItem(Order order, Long productId, String productNameSnapshot, BigDecimal unitPriceSnapshot, Integer quantity) {
         this.order = order;
         this.productId = productId;
         this.productNameSnapshot = productNameSnapshot;
@@ -63,7 +62,7 @@ public class OrderItem {
         return order;
     }
 
-    public UUID getProductId() {
+    public Long getProductId() {
         return productId;
     }
 
